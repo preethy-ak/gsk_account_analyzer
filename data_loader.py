@@ -189,41 +189,162 @@ PROMOTIONS_DATA = [
 
 
 class GraasDataLoader:
-    """Real GSK data from Graas MCP. No Snowflake credentials needed."""
+    """Real GSK data from Graas MCP. All metrics are derived from daily revenue data filtered by date."""
 
+    # ── Helper: build daily revenue DataFrame once ────────────────────────
+    def _daily_df(self) -> pd.DataFrame:
+        df = pd.DataFrame(DAILY_REVENUE_RAW, columns=["report_date", "source", "revenue_amt"])
+        df["report_date"] = pd.to_datetime(df["report_date"])
+        return df
+
+    def _filter_dates(self, df: pd.DataFrame, date_from: str, date_to: str) -> pd.DataFrame:
+        if date_from:
+            df = df[df["report_date"] >= pd.to_datetime(date_from)]
+        if date_to:
+            df = df[df["report_date"] <= pd.to_datetime(date_to)]
+        return df
+
+    # ── Orders: derived from daily revenue filtered by date ───────────────
     def get_orders_by_channel(self, date_from: str, date_to: str) -> pd.DataFrame:
-        return pd.DataFrame(ORDERS_DATA)
+        daily = self._daily_df()
+        filtered = self._filter_dates(daily, date_from, date_to)
+
+        # Calculate total days in range vs full Q1 to scale order counts
+        full_q1_days = 90  # Jan 1 – Mar 31
+        date_from_dt = pd.to_datetime(date_from) if date_from else pd.to_datetime("2026-01-01")
+        date_to_dt   = pd.to_datetime(date_to)   if date_to   else pd.to_datetime("2026-03-31")
+        selected_days = max((date_to_dt - date_from_dt).days + 1, 1)
+        scale = selected_days / full_q1_days
+
+        rows = []
+        for src, channel, total_orders, total_revenue, voucher_revenue, flash_rev, gwp_orders, total_buyers, new_buyers in [
+            ("shopee","shopee-1",15109,716351.72,404147.63,2668.35,0,0,0),
+            ("lazada","lazada-1",3602,244327.79,141140.12,1577.81,0,3444,1928),
+            ("tiktok","tiktok-2",4722,91172.03,64890.24,0,2534,0,66371),
+        ]:
+            # Scale numeric fields by the date ratio
+            rev = filtered[filtered["source"] == src]["revenue_amt"].sum()
+            if total_revenue > 0:
+                ratio = rev / total_revenue
+            else:
+                ratio = scale
+            rows.append({
+                "source": src,
+                "channel": channel,
+                "total_orders":      round(total_orders * ratio),
+                "total_revenue":     rev,
+                "voucher_revenue":   round(voucher_revenue * ratio, 2),
+                "flash_deal_revenue":round(flash_rev * ratio, 2),
+                "gwp_orders":        round(gwp_orders * ratio),
+                "total_buyers":      round(total_buyers * ratio),
+                "new_buyers":        round(new_buyers * ratio),
+            })
+        return pd.DataFrame(rows)
 
     def get_orders_by_channel_ly(self) -> pd.DataFrame:
         return pd.DataFrame(ORDERS_DATA_LY)
 
+    # ── Products: scale by date ratio ────────────────────────────────────
     def get_product_performance(self, date_from: str, date_to: str) -> pd.DataFrame:
-        return pd.concat([pd.DataFrame(TOP_SKUS), pd.DataFrame(BOTTOM_SKUS)], ignore_index=True)
+        daily = self._daily_df()
+        filtered = self._filter_dates(daily, date_from, date_to)
+        full_q1_days = 90
+        date_from_dt = pd.to_datetime(date_from) if date_from else pd.to_datetime("2026-01-01")
+        date_to_dt   = pd.to_datetime(date_to)   if date_to   else pd.to_datetime("2026-03-31")
+        selected_days = max((date_to_dt - date_from_dt).days + 1, 1)
+        scale = selected_days / full_q1_days
 
+        all_skus = TOP_SKUS + BOTTOM_SKUS
+        scaled = []
+        for sku in all_skus:
+            src = sku["source"]
+            src_rev_full    = sum(r[2] for r in DAILY_REVENUE_RAW if r[1] == src)
+            src_rev_filtered = filtered[filtered["source"] == src]["revenue_amt"].sum()
+            ratio = src_rev_filtered / src_rev_full if src_rev_full > 0 else scale
+            scaled.append({**sku,
+                "revenue":    round(sku["revenue"] * ratio, 2),
+                "units_sold": max(round(sku["units_sold"] * ratio), 0),
+                "orders":     max(round(sku["orders"] * ratio), 0),
+            })
+        return pd.DataFrame(scaled)
+
+    # ── Traffic: scale by date ratio ──────────────────────────────────────
     def get_traffic(self, date_from: str, date_to: str) -> pd.DataFrame:
         if date_from and str(date_from)[:4] == "2025":
             return pd.DataFrame(TRAFFIC_DATA_LY)
-        return pd.DataFrame(TRAFFIC_DATA)
 
+        daily = self._daily_df()
+        filtered = self._filter_dates(daily, date_from, date_to)
+        rows = []
+        for row in TRAFFIC_DATA:
+            src = row["source"]
+            src_rev_full     = sum(r[2] for r in DAILY_REVENUE_RAW if r[1] == src)
+            src_rev_filtered = filtered[filtered["source"] == src]["revenue_amt"].sum()
+            ratio = src_rev_filtered / src_rev_full if src_rev_full > 0 else 1
+            rows.append({**row,
+                "total_visitors":  round(row["total_visitors"] * ratio),
+                "total_sessions":  round(row["total_sessions"] * ratio),
+                "total_orders":    round(row["total_orders"] * ratio),
+                "revenue":         round(row["revenue"] * ratio, 2),
+                "new_visitors":    round(row.get("new_visitors", 0) * ratio),
+                "repeat_visitors": round(row.get("repeat_visitors", 0) * ratio),
+                "atc_visitors":    round(row.get("atc_visitors", 0) * ratio),
+            })
+        return pd.DataFrame(rows)
+
+    # ── Ads: scale by date ratio ──────────────────────────────────────────
     def get_ad_performance(self, date_from: str, date_to: str) -> pd.DataFrame:
-        return pd.DataFrame(ADS_DATA)
+        daily = self._daily_df()
+        filtered = self._filter_dates(daily, date_from, date_to)
+        full_q1_days = 90
+        date_from_dt = pd.to_datetime(date_from) if date_from else pd.to_datetime("2026-01-01")
+        date_to_dt   = pd.to_datetime(date_to)   if date_to   else pd.to_datetime("2026-03-31")
+        selected_days = max((date_to_dt - date_from_dt).days + 1, 1)
+        scale = selected_days / full_q1_days
+
+        rows = []
+        for ad in ADS_DATA:
+            src_key = "shopee" if "shopee" in ad["source"].lower() else \
+                      "lazada" if "lazada" in ad["source"].lower() else "tiktok"
+            src_rev_full     = sum(r[2] for r in DAILY_REVENUE_RAW if r[1] == src_key)
+            src_rev_filtered = filtered[filtered["source"] == src_key]["revenue_amt"].sum()
+            ratio = src_rev_filtered / src_rev_full if src_rev_full > 0 else scale
+            rows.append({**ad,
+                "total_spend":       round(ad["total_spend"] * ratio, 2),
+                "total_impressions": round(ad["total_impressions"] * ratio),
+                "total_clicks":      round(ad["total_clicks"] * ratio),
+                "total_conversions": round(ad["total_conversions"] * ratio),
+                "total_revenue":     round(ad["total_revenue"] * ratio, 2),
+                # ROAS and CPA stay the same — they are ratios
+                "roas": ad["roas"],
+                "ctr":  ad["ctr"],
+                "cpa":  ad["cpa"],
+            })
+        return pd.DataFrame(rows)
 
     def get_inventory_summary(self) -> pd.DataFrame:
         df = pd.DataFrame(INVENTORY_DATA)
         df["channel"] = df["source"].str.title() + " (" + df["channel"] + ")"
         return df
 
+    # ── Promotions: scale by date ratio ──────────────────────────────────
     def get_promotion_performance(self, date_from: str, date_to: str) -> pd.DataFrame:
-        return pd.DataFrame(PROMOTIONS_DATA)
+        daily = self._daily_df()
+        filtered = self._filter_dates(daily, date_from, date_to)
+        rows = []
+        for promo in PROMOTIONS_DATA:
+            src = promo["source"]
+            src_rev_full     = sum(r[2] for r in DAILY_REVENUE_RAW if r[1] == src)
+            src_rev_filtered = filtered[filtered["source"] == src]["revenue_amt"].sum()
+            ratio = src_rev_filtered / src_rev_full if src_rev_full > 0 else 1
+            rows.append({k: (round(v * ratio, 2) if isinstance(v, float) else
+                             round(v * ratio) if isinstance(v, int) and k != "source" and k != "channel" else v)
+                         for k, v in promo.items()})
+        return pd.DataFrame(rows)
 
     def get_daily_revenue_trend(self, date_from: str, date_to: str) -> pd.DataFrame:
-        df = pd.DataFrame(DAILY_REVENUE_RAW, columns=["report_date", "source", "revenue_amt"])
-        df["report_date"] = pd.to_datetime(df["report_date"])
-        if date_from:
-            df = df[df["report_date"] >= pd.to_datetime(date_from)]
-        if date_to:
-            df = df[df["report_date"] <= pd.to_datetime(date_to)]
-        return df
+        df = self._daily_df()
+        return self._filter_dates(df, date_from, date_to)
 
     def close(self):
         pass
