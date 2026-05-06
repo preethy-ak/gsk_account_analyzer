@@ -17,7 +17,7 @@ from datetime import date
 import warnings
 warnings.filterwarnings("ignore")
 
-from src.data_loader import GraasDataLoader
+from data_loader import GraasDataLoader
 
 # ── Page config ─────────────────────────────────────────────────────────────
 st.set_page_config(
