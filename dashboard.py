@@ -17,7 +17,7 @@ from datetime import date
 import warnings
 warnings.filterwarnings("ignore")
 
-from data_loader import GraasDataLoader
+from src.data_loader import GraasDataLoader
 
 # ── Page config ─────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -174,11 +174,30 @@ inventory_df     = data["inventory"]
 promotions_df    = data["promotions"]
 daily_rev_df     = data["daily_revenue"]
 
-# Filter by selected channels
-if channels:
-    orders_df    = orders_df[orders_df["source"].isin(channels)] if not orders_df.empty else orders_df
-    products_df  = products_df[products_df["source"].isin(channels)] if not products_df.empty else products_df
-    traffic_df   = traffic_df[traffic_df["source"].isin(channels)] if not traffic_df.empty else traffic_df
+# Filter by selected channels — applied to ALL dataframes
+def filter_by_channel(df, col="source"):
+    if not channels or df.empty:
+        return df
+    return df[df[col].str.lower().isin([c.lower() for c in channels])]
+
+# Normalize source names for ads (they have suffixes like "shopeeAds", "shopeeAffiliateAds")
+def filter_ads_by_channel(df):
+    if not channels or df.empty:
+        return df
+    mask = df["source"].str.lower().apply(
+        lambda s: any(c.lower() in s for c in channels)
+    )
+    return df[mask]
+
+orders_df      = filter_by_channel(orders_df)
+orders_ly_df   = filter_by_channel(orders_ly_df)
+products_df    = filter_by_channel(products_df)
+traffic_df     = filter_by_channel(traffic_df)
+traffic_ly_df  = filter_by_channel(traffic_ly_df)
+ads_df         = filter_ads_by_channel(ads_df)
+promotions_df  = filter_by_channel(promotions_df)
+daily_rev_df   = filter_by_channel(daily_rev_df)
+inventory_df   = filter_by_channel(inventory_df)
 
 
 # ── Header ───────────────────────────────────────────────────────────────────
